@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Pipi.Tests/Pipi.Tests.csproj" />
+  <Project Path="Pipi/Pipi.csproj" />
+</Solution>

@@ -27,7 +27,7 @@ internal sealed class ConfigWindow : Window
         ImGui.Separator();
 
         var doubleClickEnabled = config.DockCollapse.DoubleClickEnabled;
-        if (ImGui.Checkbox("双击标签栏空白处折叠/展开停靠组", ref doubleClickEnabled))
+        if (ImGui.Checkbox("双击标签栏空白处或右下角缩放手柄折叠/展开停靠组", ref doubleClickEnabled))
         {
             config.DockCollapse.DoubleClickEnabled = doubleClickEnabled;
             saveConfig();

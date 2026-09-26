@@ -17,6 +17,11 @@ internal sealed class DockCollapser
     // Written by chat commands, consumed during the ImGui frame.
     private int pendingBulkAction = (int)BulkAction.None;
 
+    // ImGui auto-fits a window when its resize grip is double-clicked, before plugins draw, so the
+    // group's size is captured on the first click and used on the double-click frame instead.
+    private uint gripClickedRootId;
+    private Vector2 gripClickedRootSize;
+
     public DockCollapser(DockCollapseConfig config, Action saveConfig)
     {
         this.config = config;
@@ -45,21 +50,69 @@ internal sealed class DockCollapser
         {
             // Skip double-click handling this frame so one group is never toggled twice.
             RunBulkAction(bulkAction);
+            gripClickedRootId = 0;
             return;
         }
 
-        // The only per-frame cost: a flag read. Everything below runs on the double-click frame only.
-        if (!config.DoubleClickEnabled || !ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+        // The only per-frame cost: two reads. Everything below runs on click frames only.
+        if (!config.DoubleClickEnabled)
+        {
+            gripClickedRootId = 0;
             return;
+        }
+
+        switch (ImGui.GetMouseClickedCount(ImGuiMouseButton.Left))
+        {
+            case 1:
+                RememberGripClick();
+                break;
+            case 2:
+                HandleDoubleClick();
+                break;
+        }
+    }
+
+    private void RememberGripClick()
+    {
+        gripClickedRootId = 0;
+
+        var ctx = ImGui.GetCurrentContext();
+        var window = ctx.ActiveIdWindow;
+        if (window.IsNull || ctx.ActiveId != ImGuiP.GetWindowResizeCornerID(window, 0))
+            return;
+
+        var root = window.DockNodeAsHost;
+        if (!IsCollapsible(root, ctx.FrameCount))
+            return;
+
+        gripClickedRootId = root.ID;
+        gripClickedRootSize = root.Size;
+    }
+
+    private void HandleDoubleClick()
+    {
+        // The first click of this double-click was on a grip; the grip wins over the tab bar,
+        // which it overlaps once the group is collapsed.
+        var gripRoot = gripClickedRootId == 0 ? ImGuiDockNodePtr.Null : ImGuiP.DockBuilderGetNode(gripClickedRootId);
+        gripClickedRootId = 0;
+        if (IsCollapsible(gripRoot, ImGui.GetCurrentContext().FrameCount))
+        {
+            Toggle(gripRoot, gripClickedRootSize);
+            return;
+        }
 
         var root = FindDoubleClickedRoot();
-        if (root.IsNull)
-            return;
+        if (!root.IsNull)
+            Toggle(root, root.Size);
+    }
 
-        if (IsCollapsed(root))
-            Expand(root);
+    /// <param name="size">Size of the group before this click; ImGui may have changed it since.</param>
+    private void Toggle(ImGuiDockNodePtr root, Vector2 size)
+    {
+        if (IsCollapsed(root, size.Y))
+            Expand(root, size);
         else
-            Collapse(root);
+            Collapse(root, size);
         PruneAndSave();
     }
 
@@ -73,15 +126,15 @@ internal sealed class DockCollapser
         {
             BulkAction.CollapseAll => true,
             BulkAction.ExpandAll => false,
-            _ => roots.Exists(root => !IsCollapsed(root)),
+            _ => roots.Exists(root => !IsCollapsed(root, root.Size.Y)),
         };
 
         foreach (var root in roots)
         {
-            if (collapse && !IsCollapsed(root))
-                Collapse(root);
-            else if (!collapse && IsCollapsed(root))
-                Expand(root);
+            if (collapse && !IsCollapsed(root, root.Size.Y))
+                Collapse(root, root.Size);
+            else if (!collapse && IsCollapsed(root, root.Size.Y))
+                Expand(root, root.Size);
         }
         PruneAndSave();
     }
@@ -172,26 +225,26 @@ internal sealed class DockCollapser
         return ImGui.GetFrameHeight() + borderSize;
     }
 
-    private static bool IsCollapsed(ImGuiDockNodePtr root)
+    private static bool IsCollapsed(ImGuiDockNodePtr root, float height)
     {
         var minWindowHeight = ImGui.GetCurrentContext().Style.WindowMinSize.Y;
-        return DockGeometry.IsCollapsed(root.Size.Y, CollapsedHeight(root), minWindowHeight);
+        return DockGeometry.IsCollapsed(height, CollapsedHeight(root), minWindowHeight);
     }
 
-    private void Collapse(ImGuiDockNodePtr root)
+    private void Collapse(ImGuiDockNodePtr root, Vector2 size)
     {
-        config.ExpandedHeights[root.ID] = root.Size.Y;
-        Resize(root, root.Size with { Y = CollapsedHeight(root) });
+        config.ExpandedHeights[root.ID] = size.Y;
+        Resize(root, size with { Y = CollapsedHeight(root) });
     }
 
-    private void Expand(ImGuiDockNodePtr root)
+    private void Expand(ImGuiDockNodePtr root, Vector2 size)
     {
         // Saved heights survive restarts because ImGui persists dock node IDs in its ini file;
         // the fallback covers groups collapsed by hand or before this plugin was installed.
         var height = config.ExpandedHeights.Remove(root.ID, out var saved)
             ? saved
             : FallbackExpandedHeight * ImGuiHelpers.GlobalScale;
-        Resize(root, root.Size with { Y = height });
+        Resize(root, size with { Y = height });
     }
 
     /// <summary>

@@ -16,17 +16,20 @@ public sealed class Plugin : IDalamudPlugin
     private readonly WindowSystem windowSystem = new("Pipi");
     private readonly ConfigWindow configWindow;
     private readonly DockCollapser dockCollapser;
+    private readonly Features.BetterMarketBoard.Compat.BetterMarketBoardHost marketBoard;
 
     public Plugin()
     {
         config = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
         dockCollapser = new DockCollapser(config.DockCollapse, SaveConfig);
-        configWindow = new ConfigWindow(config, dockCollapser, SaveConfig);
+        marketBoard = new Features.BetterMarketBoard.Compat.BetterMarketBoardHost(windowSystem);
+        configWindow = new ConfigWindow(config, dockCollapser, marketBoard, SaveConfig);
         windowSystem.AddWindow(configWindow);
 
         CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            HelpMessage = "打开设置。/pipi fold [on|off]：切换/折叠/展开所有浮动停靠组。",
+            HelpMessage = "打开设置。/pipi fold [on|off]：切换/折叠/展开所有浮动停靠组。" +
+                          "/pipi market [物品名/ID]：开关市场布告板（或直接查看指定物品）。",
         });
 
         PluginInterface.UiBuilder.Draw += OnDraw;
@@ -40,12 +43,43 @@ public sealed class Plugin : IDalamudPlugin
 
     [PluginService] internal static IChatGui ChatGui { get; private set; } = null!;
 
+    [PluginService] internal static IDataManager DataManager { get; private set; } = null!;
+
+    [PluginService] internal static ITextureProvider TextureProvider { get; private set; } = null!;
+
+    [PluginService] internal static IGameGui GameGui { get; private set; } = null!;
+
+    [PluginService] internal static IContextMenu ContextMenu { get; private set; } = null!;
+
+    [PluginService] internal static IFramework Framework { get; private set; } = null!;
+
+    [PluginService] internal static IClientState ClientState { get; private set; } = null!;
+
+    [PluginService] internal static IPlayerState PlayerState { get; private set; } = null!;
+
+    [PluginService] internal static Dalamud.Plugin.Services.ICondition Condition { get; private set; } = null!;
+
+    [PluginService] internal static INotificationManager NotificationManager { get; private set; } = null!;
+
+    [PluginService] internal static IToastGui ToastGui { get; private set; } = null!;
+
+    [PluginService] internal static IKeyState KeyState { get; private set; } = null!;
+
+    [PluginService] internal static IAddonLifecycle AddonLifecycle { get; private set; } = null!;
+
+    [PluginService] internal static IGameInteropProvider GameInteropProvider { get; private set; } = null!;
+
+    [PluginService] internal static Dalamud.Plugin.Services.ISeStringEvaluator SeStringEvaluator { get; private set; } = null!;
+
+    [PluginService] internal static IPluginLog Log { get; private set; } = null!;
+
     public void Dispose()
     {
         PluginInterface.UiBuilder.Draw -= OnDraw;
         PluginInterface.UiBuilder.OpenConfigUi -= ToggleConfigWindow;
         PluginInterface.UiBuilder.OpenMainUi -= ToggleConfigWindow;
         CommandManager.RemoveHandler(CommandName);
+        marketBoard.Dispose();
         windowSystem.RemoveAllWindows();
     }
 
@@ -64,9 +98,12 @@ public sealed class Plugin : IDalamudPlugin
             return;
         }
 
+        if (Features.BetterMarketBoard.Compat.CommandManager.Instance().TryHandle(parts[0], args.Trim()[parts[0].Length..].Trim()))
+            return;
+
         if (!parts[0].Equals("fold", StringComparison.OrdinalIgnoreCase))
         {
-            ChatGui.PrintError($"未知参数：{args}。用法：{CommandName} fold [on|off]");
+            ChatGui.PrintError($"未知参数：{args}。用法：{CommandName} fold [on|off] 或 {CommandName} market [物品名/ID]");
             return;
         }
 

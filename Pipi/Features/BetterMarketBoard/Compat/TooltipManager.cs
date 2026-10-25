@@ -47,6 +47,11 @@ public sealed unsafe class TooltipManager : IDisposable
 {
     private static readonly TooltipManager Shared = new();
 
+    // ItemDetail number array: index of the field visibility flags, and the flag that shows the description field
+    // (per Allagan Tools' ItemTooltipFieldVisibility).
+    private const int FieldVisibilityIndex = 5;
+    private const int DescriptionVisibleFlag = 2;
+
     private readonly List<ItemTooltipUpdateDelegate> handlers = [];
     private readonly Dictionary<int, (byte[] Original, byte[] Written)> fieldCache = [];
     private uint cachedItemId;
@@ -124,6 +129,10 @@ public sealed unsafe class TooltipManager : IDisposable
         foreach (var group in modifications.GroupBy(m => (int)m.Target))
             changed |= ApplyField(strings, group.Key, group);
 
+        // When the item's description is empty the game hides the field, so the appended text would not show.
+        if (modifications.Any(m => m.Target == TooltipItemType.Description))
+            changed |= EnsureFieldVisible(numbers, DescriptionVisibleFlag);
+
         if (!changed)
             return;
 
@@ -132,6 +141,20 @@ public sealed unsafe class TooltipManager : IDisposable
         addon->GenerateItemTooltip(numbers, strings);
         addon->UpdateGroupPositions(numbers, strings);
         KeepOnScreen((AtkUnitBase*)addon);
+    }
+
+    private static bool EnsureFieldVisible(NumberArrayData* numbers, int flag)
+    {
+        if (FieldVisibilityIndex >= numbers->AtkArrayData.Size)
+            return false;
+
+        var flags = numbers->IntArray[FieldVisibilityIndex];
+        if ((flags & flag) != 0)
+            return false;
+
+        // Written directly rather than via SetValue, so no array-changed notification triggers another update.
+        numbers->IntArray[FieldVisibilityIndex] = flags | flag;
+        return true;
     }
 
     private static void KeepOnScreen(AtkUnitBase* addon)

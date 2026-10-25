@@ -127,11 +127,14 @@ public sealed unsafe class TooltipManager : IDisposable
 
         var changed = false;
         foreach (var group in modifications.GroupBy(m => (int)m.Target))
-            changed |= ApplyField(strings, group.Key, group);
-
-        // When the item's description is empty the game hides the field, so the appended text would not show.
-        if (modifications.Any(m => m.Target == TooltipItemType.Description))
-            changed |= EnsureFieldVisible(numbers, DescriptionVisibleFlag);
+        {
+            // When the item has no description the game hides the field without clearing its string, which still
+            // holds an earlier item's description (and our text appended to it): start from empty, then show the field.
+            var hidden = group.Key == (int)TooltipItemType.Description && !IsFieldVisible(numbers, DescriptionVisibleFlag);
+            changed |= ApplyField(strings, group.Key, group, hidden);
+            if (hidden)
+                changed |= ShowField(numbers, DescriptionVisibleFlag);
+        }
 
         if (!changed)
             return;
@@ -143,17 +146,17 @@ public sealed unsafe class TooltipManager : IDisposable
         KeepOnScreen((AtkUnitBase*)addon);
     }
 
-    private static bool EnsureFieldVisible(NumberArrayData* numbers, int flag)
-    {
-        if (FieldVisibilityIndex >= numbers->AtkArrayData.Size)
-            return false;
+    // An unknown layout counts as visible, so the field is neither emptied nor flagged.
+    private static bool IsFieldVisible(NumberArrayData* numbers, int flag) =>
+        FieldVisibilityIndex >= numbers->AtkArrayData.Size || (numbers->IntArray[FieldVisibilityIndex] & flag) != 0;
 
-        var flags = numbers->IntArray[FieldVisibilityIndex];
-        if ((flags & flag) != 0)
+    private static bool ShowField(NumberArrayData* numbers, int flag)
+    {
+        if (IsFieldVisible(numbers, flag))
             return false;
 
         // Written directly rather than via SetValue, so no array-changed notification triggers another update.
-        numbers->IntArray[FieldVisibilityIndex] = flags | flag;
+        numbers->IntArray[FieldVisibilityIndex] |= flag;
         return true;
     }
 
@@ -171,16 +174,19 @@ public sealed unsafe class TooltipManager : IDisposable
         addon->SetPosition(addon->X, (short)Math.Max(0, device->Height - height));
     }
 
-    private bool ApplyField(StringArrayData* strings, int index, IEnumerable<TooltipItemModification> modifications)
+    private bool ApplyField(StringArrayData* strings, int index, IEnumerable<TooltipItemModification> modifications,
+        bool startEmpty)
     {
         if (index < 0 || index >= strings->AtkArrayData.Size)
             return false;
 
         var current = ReadField(strings, index);
         // If the field still holds what we wrote last time, the game did not regenerate it: start from the cached original.
-        var original = fieldCache.TryGetValue(index, out var cached) && current.AsSpan().SequenceEqual(cached.Written)
-            ? cached.Original
-            : current;
+        var original = startEmpty
+            ? []
+            : fieldCache.TryGetValue(index, out var cached) && current.AsSpan().SequenceEqual(cached.Written)
+                ? cached.Original
+                : current;
 
         var builder = new SeStringBuilder();
         builder.Append(new ReadOnlySeStringSpan(original));

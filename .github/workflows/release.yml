@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*.*'
+  # 兜底：tag 已推送但发布失败时，可手动对该 tag 重新发布
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要发布的 tag，例如 v0.2.0.0
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      # 推送插件库需要对 blackappleD/DalamudPlugins 有 Contents 写权限的 PAT；未配置时跳过该步
+      PLUGIN_REPO_TOKEN: ${{ secrets.PLUGIN_REPO_TOKEN }}
+    steps:
+      - name: Resolve tag
+        id: tag
+        shell: pwsh
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          $tag = if ($env:INPUT_TAG) { $env:INPUT_TAG } else { $env:REF_NAME }
+          if ($tag -notmatch '^v\d+\.\d+\.\d+\.\d+$') { throw "tag 必须是 v<四段版本号>：$tag" }
+          "tag=$tag" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
+          "version=$($tag.Substring(1))" | Out-File -Append -FilePath $env:GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+
+      - name: Check version
+        shell: pwsh
+        run: |
+          # 版本号以 Pipi.csproj 的 Version 为准，tag 必须与之一致
+          $version = ([xml](Get-Content Pipi/Pipi.csproj -Raw)).Project.PropertyGroup.Version | Where-Object { $_ } | Select-Object -First 1
+          if ($version -ne '${{ steps.tag.outputs.version }}') {
+            throw "Pipi.csproj 的 Version ($version) 与 tag (${{ steps.tag.outputs.tag }}) 不一致"
+          }
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Dalamud
+        uses: ./.github/actions/setup-dalamud
+
+      - name: Test
+        run: dotnet test Pipi.Tests/Pipi.Tests.csproj
+
+      - name: Build
+        run: dotnet build Pipi/Pipi.csproj -c Release
+
+      - name: Create GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          Copy-Item Pipi/bin/Release/Pipi/latest.zip Pipi.zip
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            # 重跑时只替换附件
+            gh release upload $env:TAG Pipi.zip --clobber
+          } else {
+            gh release create $env:TAG Pipi.zip --title $env:TAG --generate-notes --verify-tag
+          }
+          if ($LASTEXITCODE -ne 0) { throw "发布 Release 失败：$LASTEXITCODE" }
+
+      - name: Checkout plugin repository
+        if: env.PLUGIN_REPO_TOKEN != ''
+        uses: actions/checkout@v6
+        with:
+          repository: blackappleD/DalamudPlugins
+          token: ${{ secrets.PLUGIN_REPO_TOKEN }}
+          path: DalamudPlugins
+
+      - name: Update plugin repository
+        if: env.PLUGIN_REPO_TOKEN != ''
+        shell: pwsh
+        working-directory: DalamudPlugins
+        env:
+          PYTHONUTF8: 1
+          VERSION: ${{ steps.tag.outputs.version }}
+          DOWNLOAD_URL: https://github.com/${{ github.repository }}/releases/download/${{ steps.tag.outputs.tag }}/Pipi.zip
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+          for ($i = 1; $i -le 5; $i++) {
+            git fetch origin main
+            git reset --hard origin/main
+            python ../.github/scripts/update_plugin_repo.py repo.json ../Pipi/bin/Release/Pipi/Pipi.json $env:DOWNLOAD_URL
+            if ($LASTEXITCODE -ne 0) { throw "更新 repo.json 失败：$LASTEXITCODE" }
+
+            git add repo.json
+            git diff --cached --quiet
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host 'repo.json 已是最新，无需提交'
+              exit 0
+            }
+
+            git commit -m "chore: bump Pipi to $env:VERSION"
+            git push origin HEAD:main
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            Write-Host "推送被拒绝（第 $i 次），重试"
+            Start-Sleep -Seconds 3
+          }
+          throw '推送插件库失败'
+
+      - name: Remind to update plugin repository
+        if: env.PLUGIN_REPO_TOKEN == ''
+        shell: pwsh
+        run: Write-Host '::warning::未配置 PLUGIN_REPO_TOKEN，未更新 DalamudPlugins 的 repo.json，请手动更新'

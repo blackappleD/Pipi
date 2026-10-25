@@ -50,16 +50,22 @@ dotnet build Pipi.slnx
 dotnet test Pipi.Tests/Pipi.Tests.csproj
 ```
 
-`Dalamud.CN.NET.Sdk` 从 `%AppData%\XIVLauncherCN\addon\Hooks\dev\` 解析 Dalamud 程序集。
+`Dalamud.CN.NET.Sdk` 从 `%AppData%\XIVLauncherCN\addon\Hooks\dev\` 解析 Dalamud 程序集，设置了环境变量 `DALAMUD_HOME` 时改用该目录。
 本地调试时在 Dalamud 设置 → 实验性 → 开发插件目录中添加 `Pipi/bin/Debug/Pipi.dll`。
+
+推送到 `main` 和 PR 会触发 GitHub Actions 构建（`.github/workflows/build.yml`），CI 从国服 Dalamud 发行源下载最新版本用于编译。
 
 ## 发布
 
 版本号以 `Pipi/Pipi.csproj` 的 `Version` 为准（四段数字，严格递增）。
 
-1. `dotnet build Pipi/Pipi.csproj -c Release`，产物为 `Pipi/bin/Release/Pipi/latest.zip`。
-2. 将 `latest.zip` 复制为 `Pipi.zip`，执行 `gh release create v<版本> Pipi.zip --title "v<版本>" --generate-notes`。
-3. 更新 [blackappleD/DalamudPlugins](https://github.com/blackappleD/DalamudPlugins) 的 `repo.json`。
+1. 修改 `Version`，提交并推送到 `main`。
+2. 推送同名 tag：`git tag v<版本>`，`git push origin v<版本>`。
+
+tag 会触发 `.github/workflows/release.yml`：校验 tag 与 `Version` 一致，测试、构建，创建带 `Pipi.zip` 的 GitHub Release，
+再更新 [blackappleD/DalamudPlugins](https://github.com/blackappleD/DalamudPlugins) 的 `repo.json`。
+更新插件库需要在本仓库的 Actions secrets 中配置 `PLUGIN_REPO_TOKEN`（对 DalamudPlugins 有 Contents 读写权限的 fine-grained PAT），
+未配置时会跳过这一步并给出警告，需手动更新 `repo.json`。发布失败时可在 Actions 页面手动运行 Release 并填入 tag 重试。
 
 ## 许可证
 

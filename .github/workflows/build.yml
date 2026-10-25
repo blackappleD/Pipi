@@ -1,0 +1,40 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Set up Dalamud
+        uses: ./.github/actions/setup-dalamud
+
+      - name: Test
+        run: dotnet test Pipi.Tests/Pipi.Tests.csproj
+
+      - name: Build
+        run: dotnet build Pipi/Pipi.csproj -c Release
+
+      - name: Upload plugin
+        uses: actions/upload-artifact@v4
+        with:
+          name: Pipi
+          path: Pipi/bin/Release/Pipi/latest.zip
+          if-no-files-found: error

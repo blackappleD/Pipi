@@ -1,0 +1,23 @@
+name: Setup Dalamud CN
+description: 下载最新的国服 Dalamud 并设置 DALAMUD_HOME，供 Dalamud.CN.NET.Sdk 解析程序集。
+
+runs:
+  using: composite
+  steps:
+    - name: Download Dalamud CN
+      shell: pwsh
+      run: |
+        # 与 XIVLauncherCN 使用同一发行源：RELEASE 给出当前版本号，<版本>/latest.7z 为完整包
+        $base = 'https://dalamud-dis.atmoomen.top'
+        $version = (Invoke-WebRequest "$base/RELEASE" -UseBasicParsing).Content.Trim()
+        if ([string]::IsNullOrWhiteSpace($version)) { throw 'Dalamud 发行源返回了空版本号' }
+        Write-Host "Dalamud CN $version"
+
+        $archive = Join-Path $env:RUNNER_TEMP 'dalamud.7z'
+        $dir = Join-Path $env:RUNNER_TEMP 'dalamud'
+        Invoke-WebRequest "$base/$version/latest.7z" -OutFile $archive -UseBasicParsing
+        7z x $archive "-o$dir" -y | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "解压 Dalamud 失败：$LASTEXITCODE" }
+        if (-not (Test-Path (Join-Path $dir 'Dalamud.dll'))) { throw "解压结果中没有 Dalamud.dll：$dir" }
+
+        "DALAMUD_HOME=$dir" | Out-File -Append -FilePath $env:GITHUB_ENV
